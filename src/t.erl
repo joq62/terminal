@@ -17,11 +17,14 @@
 %% --------------------------------------------------------------------
 -define(SERVER,?MODULE).
 
-
+-define(MonitorInterval,10*1000).
 
 %% External exports
 -export([
+	 monitor_hosts/0,
+	 monitor_appl/0,
 
+	 host_status/1, %support
 	 host_status/0,
 	 appl_status/0,
 	 
@@ -47,6 +50,8 @@
 		appl_status,
 		applications,
 		num_instances,
+		hosts_state,
+		appl_state,
 		start_time=undefined
 	       }).
 
@@ -88,6 +93,11 @@ host_status()->
 
 appl_status()->
     gen_server:call(?SERVER, {appl_status},infinity).
+
+monitor_hosts()->
+    gen_server:call(?SERVER, {monitor_hosts},infinity).
+monitor_appl()->
+    gen_server:call(?SERVER, {monitor_appl},infinity).
 
 %% ====================================================================
 %% Support functions
@@ -153,6 +163,8 @@ init([]) ->
     
   %  io:format("DEBUG: K3NodesStatus ~p~n",[K3NodesStatus]),
    % io:format("DEBUG: ApplStatus ~p~n",[ApplStatus]),
+    spawn(fun()->
+		  do_monitor() end),
     
    
 
@@ -163,7 +175,8 @@ init([]) ->
 	    appl_status=ApplStatus,
 	    applications=Applications,
 	    num_instances=NumInstances,
-
+	    hosts_state=undefined,
+	    appl_state=undefined,
 	    start_time={date(),time()}
 	   }
     }.
@@ -180,42 +193,41 @@ init([]) ->
 %% --------------------------------------------------------------------
 
 handle_call({host_status},_From, State) ->
-    K3NodesStatus=t_lib:connect_hosts(State#state.clusterid,
-				      State#state.hosts),
-    Running=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
-    Missing=[{HostName,K3Node}||{HostName,K3Node,pang}<-K3NodesStatus],
-    Reply=case Missing of
-	      []->
-		  {desired_state_fulfilled,
-		   running,Running,missing,Missing};
-	      _->
-		  {desired_state_NOT_fulfilled,
-		   running,Running,missing,Missing}
-	  end,
-    NewState=State#state{k3_nodes_status=K3NodesStatus},
+    {Reply,NewState}=host_status(State),
     {reply, Reply, NewState};
 
 handle_call({appl_status},_From, State) ->
-    K3NodesStatus=t_lib:connect_hosts(State#state.clusterid,
-				      State#state.hosts),
-    Running=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
-    [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node}<-Running],
-    ApplStatus=t_lib:appl_status(K3Node,
-				 State#state.applications,
-				 State#state.num_instances),
-    RunningAppl=[{ApplId,Nodes}||{ApplId,0,Num,Nodes}<-ApplStatus],
-    MissingAppl=[{ApplId,Nodes}||{ApplId,Diff,Num,Nodes}<-ApplStatus,
-			     Diff>0],
-    Reply=case MissingAppl of
-	      []->
-		  {desired_state_fulfilled,
-		   running,RunningAppl,missing,MissingAppl};
-	      _->
-		  {desired_state_NOT_fulfilled,
-		   running,RunningAppl,missing,MissingAppl}
-	  end,
-    NewState=State#state{appl_status=ApplStatus},
+    {Reply,NewState}=appl_status(State),
     {reply, Reply, NewState};
+
+handle_call({monitor_hosts},_From, State) ->
+    {{HostsState,running,_Running,missing,_Missing},NewState_1}=host_status(State),
+   % io:format("HostsState: ~p, ~p~n",[HostsState,State#state.hosts_state]),
+    NewState=case HostsState /= State#state.hosts_state of
+		 true->
+		     io:format("Hosts: ~p, ~p~n",[HostsState,{date(),time()}]),
+		     NewState_1#state{hosts_state=HostsState};
+		 false ->
+		     NewState_1 
+	     end,
+    Reply={HostsState,running,_Running,missing,_Missing},
+    {reply, Reply, NewState};
+
+handle_call({monitor_appl},_From,State) ->
+    {{ApplState,running,_Running,missing,_Missing},NewState_1}=appl_status(State),
+   % io:format("ApplState: ~p, ~p~n",[ApplState,State#state.appl_state]),
+    NewState=case ApplState /= State#state.appl_state of
+		 true->
+		     io:format("Appl: ~p, ~p~n",[ApplState,{date(),time()}]),
+		     NewState_1#state{appl_state=ApplState};
+		 false ->
+		     NewState_1 
+	     end,
+    spawn(fun()->
+		  do_monitor() end),
+    Reply={ApplState,running,_Running,missing,_Missing},
+    {reply,Reply,NewState};
+
 
 handle_call({read_state},_From, State) ->
     Reply=State,
@@ -249,7 +261,6 @@ handle_call(Request, From, State) ->
 %%          {noreply, State, Timeout} |
 %%          {stop, Reason, State}            (terminate/2 is called)
 %% --------------------------------------------------------------------
-
 
 handle_cast(_Msg, State) ->
   %  rpc:cast(node(),log,log,[?Log_ticket("unmatched cast",[Msg])]),
@@ -291,3 +302,55 @@ code_change(_OldVsn, State, _Extra) ->
 %% --------------------------------------------------------------------
 
 		  
+%% --------------------------------------------------------------------
+%% Function:start/0 
+%% Description: Initiate the eunit tests, set upp needed processes etc
+%% Returns: non
+%% --------------------------------------------------------------------
+host_status(State)->
+    K3NodesStatus=t_lib:connect_hosts(State#state.clusterid,
+				      State#state.hosts),
+    Running=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
+    Missing=[{HostName,K3Node}||{HostName,K3Node,pang}<-K3NodesStatus],
+    Reply=case Missing of
+	      []->
+		  {desired_state_fulfilled,
+		   running,Running,missing,Missing};
+	      _->
+		  {desired_state_NOT_fulfilled,
+		   running,Running,missing,Missing}
+	  end,
+    NewState=State#state{k3_nodes_status=K3NodesStatus},
+    {Reply,NewState}.
+
+
+appl_status(State)->
+    K3NodesStatus=t_lib:connect_hosts(State#state.clusterid,
+				      State#state.hosts),
+    Running=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
+    [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node}<-Running],
+    ApplStatus=t_lib:appl_status(K3Node,
+				 State#state.applications,
+				 State#state.num_instances),
+    RunningAppl=[{ApplId,Nodes}||{ApplId,0,_Num,Nodes}<-ApplStatus],
+    MissingAppl=[{ApplId,Nodes}||{ApplId,Diff,_Num,Nodes}<-ApplStatus,
+				 Diff>0],
+    Reply=case MissingAppl of
+	      []->
+		  {desired_state_fulfilled,
+		   running,RunningAppl,missing,MissingAppl};
+	      _->
+		  {desired_state_NOT_fulfilled,
+		   running,RunningAppl,missing,MissingAppl}
+	  end,
+    NewState=State#state{appl_status=ApplStatus},
+    {Reply,NewState}.
+
+
+
+do_monitor()->
+    timer:sleep(?MonitorInterval),
+    rpc:call(node(),t,monitor_hosts,[],10*1000),
+    rpc:call(node(),t,monitor_appl,[],10*1000).
+    
+    
