@@ -11,7 +11,7 @@ all:
 	echo complile succeded and do git;
 	git add -f *;
 	git commit -m  $(m);
-	git push;
+	git push; 
 	echo there you go
 start:
 	rm -rf  *~ */*~ src/*.beam test/*.beam test_ebin erl_cra*;
