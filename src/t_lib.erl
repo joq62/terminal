@@ -45,12 +45,34 @@ connect_hosts(ClusterId,Hosts)->
 %% Description: Initiate the eunit tests, set upp needed processes etc
 %% Returns: non
 %% --------------------------------------------------------------------
-appl_status(K3Node,Applications,NumInstances)->
+appl_status([],Applications,NumInstances)->
+    [{ApplId,NumInstances-0,0,[]}||{ApplId,_Vsn}<-Applications];
+appl_status(RunningK3Nodes,Applications,NumInstances)->
+    NodesWithSD=[K3Node||{_HostName,K3Node}<-RunningK3Nodes,
+			 pong=:=rpc:call(K3Node,sd,ping,[],5000)],
+    case NodesWithSD of
+	[]->
+	    [{ApplId,NumInstances-0,0,[]}||{ApplId,_Vsn}<-Applications];
+	[K3Node|_]->
+	    get_appl_status(Applications,K3Node,NumInstances,[])
+    end.
+
+get_appl_status([],_K3Node,_NumInstances,Result)->
+    Result;
+get_appl_status([{ApplId,_Vsn}|T],K3Node,NumInstances,Acc)->
     
-    [{ApplId,
-      NumInstances-list_length:start(rpc:call(K3Node,sd,get,[list_to_atom(ApplId)],2000)),
-      list_length:start(rpc:call(K3Node,sd,get,[list_to_atom(ApplId)],2000)),
-      rpc:call(K3Node,sd,get,[list_to_atom(ApplId)],2000)}||{ApplId,_Vsn}<-Applications].
+    Result=case rpc:call(K3Node,sd,get,[list_to_atom(ApplId)],2000) of
+	       {badrpc,_}->
+		   {ApplId,NumInstances-0,0,[]};
+	       []->
+		   {ApplId,NumInstances-0,0,[]};
+	       ApplNodes->
+		   {ApplId,NumInstances-list_length:start(ApplNodes),list_length:start(ApplNodes),
+		    ApplNodes}
+	   end,
+    get_appl_status(T,K3Node,NumInstances,[Result|Acc]).
+
+
 
 %% ====================================================================
 %% --------------------------------------------------------------------

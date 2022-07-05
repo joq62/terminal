@@ -157,22 +157,24 @@ init([]) ->
     {ok,NumInstances}=db_deployment_info:read(num_instances,DeploymentInfoSpec),
     true=erlang:set_cookie(node(),list_to_atom(CookieStr)),
 
-    K3NodesStatus=t_lib:connect_hosts(ClusterId,Hosts),
-    [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
-    ApplStatus=t_lib:appl_status(K3Node,Applications,NumInstances),
+   % State=#{clusterid=ClusterId,
+%	    hosts=Hosts,
+%	    applications=Applications,
+%	    num_instances=NumInstances},
+ %   K3NodesStatus=t_lib:connect_hosts(ClusterId,Hosts),
+  %  [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
+   % ApplStatus=t_lib:appl_status(K3Node,Applications,NumInstances),
     
   %  io:format("DEBUG: K3NodesStatus ~p~n",[K3NodesStatus]),
    % io:format("DEBUG: ApplStatus ~p~n",[ApplStatus]),
     spawn(fun()->
 		  do_monitor() end),
-    
-   
 
     {ok, #state{
 	    clusterid=ClusterId,
 	    hosts=Hosts,
-	    k3_nodes_status=K3NodesStatus,
-	    appl_status=ApplStatus,
+	    k3_nodes_status=undefined,
+	    appl_status=undefined,
 	    applications=Applications,
 	    num_instances=NumInstances,
 	    hosts_state=undefined,
@@ -214,20 +216,18 @@ handle_call({monitor_hosts},_From, State) ->
     {reply, Reply, NewState};
 
 handle_call({monitor_appl},_From,State) ->
-    {{ApplState,running,_Running,missing,_Missing},NewState_1}=appl_status(State),
-   % io:format("ApplState: ~p, ~p~n",[ApplState,State#state.appl_state]),
+    {{ApplState,running,Running,missing,Missing},NewState_1}= appl_status(State),
     NewState=case ApplState /= State#state.appl_state of
 		 true->
 		     io:format("Appl: ~p, ~p~n",[ApplState,{date(),time()}]),
 		     NewState_1#state{appl_state=ApplState};
-		 false ->
+			 false ->
 		     NewState_1 
 	     end,
     spawn(fun()->
 		  do_monitor() end),
-    Reply={ApplState,running,_Running,missing,_Missing},
+    Reply={ApplState,running,Running,missing,Missing},
     {reply,Reply,NewState};
-
 
 handle_call({read_state},_From, State) ->
     Reply=State,
@@ -320,30 +320,41 @@ host_status(State)->
 		  {desired_state_NOT_fulfilled,
 		   running,Running,missing,Missing}
 	  end,
-    NewState=State#state{k3_nodes_status=K3NodesStatus},
+    {DesiredStatus,_,_,_,_}=Reply,
+    NewState=State#state{k3_nodes_status=DesiredStatus},
     {Reply,NewState}.
 
 
 appl_status(State)->
     K3NodesStatus=t_lib:connect_hosts(State#state.clusterid,
 				      State#state.hosts),
-    Running=[{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus],
-    [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node}<-Running],
-    ApplStatus=t_lib:appl_status(K3Node,
-				 State#state.applications,
-				 State#state.num_instances),
-    RunningAppl=[{ApplId,Nodes}||{ApplId,0,_Num,Nodes}<-ApplStatus],
-    MissingAppl=[{ApplId,Nodes}||{ApplId,Diff,_Num,Nodes}<-ApplStatus,
-				 Diff>0],
-    Reply=case MissingAppl of
+    Reply=case [{HostName,K3Node}||{HostName,K3Node,pong}<-K3NodesStatus] of
 	      []->
-		  {desired_state_fulfilled,
-		   running,RunningAppl,missing,MissingAppl};
-	      _->
 		  {desired_state_NOT_fulfilled,
-		   running,RunningAppl,missing,MissingAppl}
+		   running,[],missing,[undefined]};
+	      RunningK3Nodes->
+		 % [{_HostName,K3Node}|_]=[{HostName,K3Node}||{HostName,K3Node}<-RunningK3Nodes],
+		  ApplStatus=t_lib:appl_status(RunningK3Nodes,
+					       State#state.applications,
+					       State#state.num_instances),		  
+
+	%	  ApplStatus=t_lib:appl_status(K3Node,
+	%				       State#state.applications,
+	%				       State#state.num_instances),
+		  RunningAppl=[{ApplId,Nodes}||{ApplId,0,_Num,Nodes}<-ApplStatus],
+		  MissingAppl=[{ApplId,Nodes}||{ApplId,Diff,_Num,Nodes}<-ApplStatus,
+					       Diff>0],
+		  case MissingAppl of
+		      []->
+			  {desired_state_fulfilled,
+			   running,RunningAppl,missing,MissingAppl};
+		      _->
+			  {desired_state_NOT_fulfilled,
+			   running,RunningAppl,missing,MissingAppl}
+		  end		 
 	  end,
-    NewState=State#state{appl_status=ApplStatus},
+    {DesiredStatus,_,_,_,_}=Reply,
+    NewState=State#state{appl_status=DesiredStatus},
     {Reply,NewState}.
 
 
