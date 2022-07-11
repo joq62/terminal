@@ -55,5 +55,5 @@ eunit:
 #	testing
 	mkdir test_ebin;
 	erlc -o test_ebin test/*.erl;
-	erl -pa * -pa ebin -pa test_ebin -sname terminal -run t appl_start [] -teminal deployment_name $(deployment_name)
+	erl -pa * -pa ebin -pa test_ebin -sname terminal -s basic_eunit start  deployment_name $(deployment_name) -hidden
 #	erl -pa * -pa ebin -pa test_ebin -sname $(deployment_name) -run basic_eunit start -cluster deployment_name $(deployment_name)
